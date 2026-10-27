@@ -8,10 +8,12 @@
 mod crc;
 mod listing;
 mod read;
+mod write;
 
 use std::fmt;
 
 pub use read::read;
+pub use write::{write, WriteError};
 
 /// What went wrong while reading, and where.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,18 +174,62 @@ impl Schema {
         parts.join("/")
     }
 
+    /// Every node's full path, each built from its parent's: linear in the paths' total length,
+    /// where `full_name` per node walks to the root every time. Equal to `full_name` for a
+    /// model `read` accepted; a hand-built parent cycle is cut where it closes.
+    pub fn full_names(&self) -> Vec<String> {
+        let n = self.nodes.len();
+        let is_root = |i: usize| {
+            let p = self.nodes[i].parent;
+            p as usize == i || p == 0xFFFF
+        };
+        let mut out: Vec<Option<String>> = vec![None; n];
+        let mut visiting = vec![false; n];
+        let mut path = Vec::new();
+        for start in 0..n {
+            path.clear();
+            let mut i = start;
+            while out[i].is_none() && !visiting[i] {
+                visiting[i] = true;
+                path.push(i);
+                let p = self.nodes[i].parent as usize;
+                if is_root(i) || p >= n {
+                    break;
+                }
+                i = p;
+            }
+            // The path's last node is the topmost; build downwards from it.
+            for &i in path.iter().rev() {
+                let p = self.nodes[i].parent as usize;
+                let name = self.nodes[i].name.as_str();
+                let full = if is_root(i) {
+                    String::new()
+                } else if p >= n || is_root(p) || out[p].is_none() {
+                    name.to_string()
+                } else {
+                    format!("{}/{name}", out[p].as_deref().unwrap_or_default())
+                };
+                out[i] = Some(full);
+                visiting[i] = false;
+            }
+        }
+        out.into_iter().map(Option::unwrap_or_default).collect()
+    }
+
     /// MRT Core's `ComputeHierarchicalSchemaVersionChecksum` (mrmmin/HSchema.cpp).
     pub fn checksum(&self) -> u32 {
         let mut crc = hash_str(0, &self.unique_name);
         crc = hash_str(crc, &self.name);
         crc = hash_u32(crc, self.major as u32 | (self.minor as u32) << 16);
         let scopes: Vec<u16> = self.scopes.iter().map(|s| s.node).collect();
+        let names = self.full_names();
         for pool in [&scopes, &self.items] {
             crc = crc::crc32(crc, &[0; 8]); // the pool's description: none
             crc = hash_u32(crc, 1); // case-insensitive
             crc = hash_u32(crc, pool.len() as u32);
             for &node in pool.iter() {
-                crc = hash_str(crc, &self.full_name(node as usize));
+                let name = names.get(node as usize).map_or("", String::as_str);
+                crc = hash_str(crc, name);
             }
         }
         crc

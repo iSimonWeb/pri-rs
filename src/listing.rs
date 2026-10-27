@@ -86,6 +86,7 @@ fn value_text(pri: &Pri, c: &Candidate) -> Result<String, Error> {
 fn map_listing(pri: &Pri, rm: &ResMap, out: &mut String) -> Result<(), Error> {
     let hs = schema_at(pri, rm.schema_section)?;
     let dn = decn_at(pri, rm.decn_section)?;
+    let names = hs.full_names();
     let item_node: HashMap<u16, usize> = hs
         .nodes
         .iter()
@@ -112,7 +113,7 @@ fn map_listing(pri: &Pri, rm: &ResMap, out: &mut String) -> Result<(), Error> {
                 .decisions
                 .get(dec as usize)
                 .ok_or_else(|| bad(format!("decision {dec}")))?;
-            let _ = writeln!(out, "{} decision {dec}", hs.full_name(*node));
+            let _ = writeln!(out, "{} decision {dec}", names[*node]);
             let sets = dn
                 .index_table
                 .get(f as usize..f as usize + nsets as usize)

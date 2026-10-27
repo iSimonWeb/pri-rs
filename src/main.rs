@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use pri::{Body, Candidate, Pri, Section};
 
-const USAGE: &str = "usage: pri dump <file.pri>";
+const USAGE: &str = "usage: pri dump <file.pri> | pri roundtrip <file.pri>...";
 /// Byte runs longer than this are printed abbreviated.
 const HEX_LIMIT: usize = 48;
 
@@ -14,11 +14,92 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [cmd, path] if cmd == "dump" => dump_file(path),
+        [cmd, paths @ ..] if cmd == "roundtrip" && !paths.is_empty() => roundtrip(paths),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
     }
+}
+
+/// Reads, writes and compares each file. A file that doesn't parse (or write) fails the run; one
+/// that comes back different is only reported, since the writer lays a file out canonically.
+fn roundtrip(paths: &[String]) -> ExitCode {
+    let mut same = 0;
+    let mut broken = false;
+    for path in paths {
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("pri: {path}: {e}");
+                broken = true;
+                continue;
+            }
+        };
+        let result = pri::read(&data)
+            .map_err(|e| e.to_string())
+            .and_then(|file| pri::write(&file).map_err(|e| e.to_string()));
+        match result {
+            Ok(out) if out == data => same += 1,
+            Ok(out) => println!("FAIL {path} {}", first_difference(&data, &out)),
+            Err(e) => {
+                println!("FAIL {path} {e}");
+                broken = true;
+            }
+        }
+    }
+    println!("{same}/{} identical", paths.len());
+    if broken {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// The section bodies (header and footer excluded) of a file whose TOC reads cleanly.
+fn raw_sections(data: &[u8]) -> Option<Vec<(String, &[u8])>> {
+    let u16_at = |at: usize| {
+        data.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let u32_at = |at: usize| {
+        data.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    let toc = u32_at(16)?;
+    let first = u32_at(20)?;
+    let mut out = Vec::new();
+    for i in 0..u16_at(24)? as usize {
+        let at = toc + 32 * i;
+        let id = pri::id_text(data.get(at..at + 16)?.try_into().ok()?);
+        let start = first + u32_at(at + 24)?;
+        let len = u32_at(at + 28)?;
+        out.push((id, data.get(start + 32..(start + len).checked_sub(8)?)?));
+    }
+    Some(out)
+}
+
+/// Where a written file first departs from the original: the section and the byte within its body.
+fn first_difference(original: &[u8], written: &[u8]) -> String {
+    let (Some(a), Some(b)) = (raw_sections(original), raw_sections(written)) else {
+        return format!("differs (lens {} vs {})", original.len(), written.len());
+    };
+    for (i, ((id, x), (_, y))) in a.iter().zip(&b).enumerate() {
+        if x != y {
+            let at = x.iter().zip(y.iter()).position(|(p, q)| p != q);
+            return format!(
+                "{id} (section {i}) body differs at {} (lens {} vs {})",
+                at.unwrap_or(x.len().min(y.len())),
+                x.len(),
+                y.len()
+            );
+        }
+    }
+    format!(
+        "differs outside the section bodies (lens {} vs {})",
+        original.len(),
+        written.len()
+    )
 }
 
 fn dump_file(path: &str) -> ExitCode {
@@ -148,6 +229,7 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
                 h.names_ascii.len(),
                 hex(&h.pad)
             );
+            let full_names = h.full_names();
             for (i, n) in h.nodes.iter().enumerate() {
                 let first = char::from_u32(n.first as u32).filter(|&c| c != '\0');
                 let _ = writeln!(
@@ -163,7 +245,7 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
                     n.offset,
                     n.flags_hi,
                     n.name,
-                    h.full_name(i)
+                    full_names[i]
                 );
             }
             let computed = h.checksum();
