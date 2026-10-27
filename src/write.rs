@@ -211,7 +211,9 @@ fn name_blocks(h: &Schema, has_ascii_block: bool) -> Result<NameBlocks, WriteErr
     Ok((uni.0, ascii, placed))
 }
 
-fn schema(h: &Schema) -> Result<Vec<u8>, WriteError> {
+/// A schema section's body in two parts, the head and the names block, with the block's total
+/// still unset: the block's padding depends on `pad`, which `pad_bodies` has to size from them.
+fn schema_parts(h: &Schema) -> Result<(Vec<u8>, Vec<u8>), WriteError> {
     let has_ascii_block = h.hnames_id.as_ref() == Some(HNAMESX_ID);
     if h.extended != h.hnames_id.is_some() {
         return err("an extended schema, and only it, to have a names-block identifier");
@@ -250,7 +252,7 @@ fn schema(h: &Schema) -> Result<Vec<u8>, WriteError> {
     o.wz(&h.name);
     o.u16(0);
 
-    // The names block, whose total is padded to 8 from its own start.
+    // The names block, whose total is padded to 8 from its own start (`schema` sets it).
     let mut b = Out::default();
     b.u16(max_full_path);
     b.u16(0);
@@ -291,12 +293,43 @@ fn schema(h: &Schema) -> Result<Vec<u8>, WriteError> {
     }
     b.bytes(&uni);
     b.bytes(&ascii);
-    let used = b.0.len();
+    Ok((o.0, b.0))
+}
+
+fn schema(h: &Schema) -> Result<Vec<u8>, WriteError> {
+    let (mut o, mut b) = schema_parts(h)?;
+    let used = b.len();
     let padded = used + (used.wrapping_neg() % 8).min(h.pad.len());
-    b.0[20..24].copy_from_slice(&u32_of(padded, "the names block")?.to_le_bytes());
-    o.bytes(&b.0);
-    o.bytes(&h.pad);
-    Ok(o.0)
+    b[20..24].copy_from_slice(&u32_of(padded, "the names block")?.to_le_bytes());
+    o.extend_from_slice(&b);
+    o.extend_from_slice(&h.pad);
+    Ok(o)
+}
+
+/// Sizes the `pad` of every section that has one so each body ends on 8 bytes, as makepri
+/// writes them: for a built model, whose pads are not read from a file.
+pub(crate) fn pad_bodies(pri: &mut Pri) -> Result<(), WriteError> {
+    for s in &mut pri.sections {
+        match &mut s.body {
+            Body::Schema(Some(h)) => {
+                h.pad.clear();
+                let (head, block) = schema_parts(h)?;
+                let block_pad = block.len().wrapping_neg() % 8;
+                let rest = (head.len() + block.len() + block_pad).wrapping_neg() % 8;
+                h.pad = vec![0; block_pad + rest];
+            }
+            Body::Decisions(d) => {
+                d.pad.clear();
+                d.pad = vec![0; decn_info(d)?.len().wrapping_neg() % 8];
+            }
+            Body::Map(m) => {
+                m.pad.clear();
+                m.pad = vec![0; res_map(m)?.len().wrapping_neg() % 8];
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// The name's first character, uppercased, as a UTF-16 unit; 0 for none.

@@ -5,6 +5,7 @@
 //! sections' footers are not kept; they follow from the rest. The format is described in
 //! docs/pri-plan.md, section 2.
 
+mod build;
 mod crc;
 mod listing;
 mod read;
@@ -12,6 +13,7 @@ mod write;
 
 use std::fmt;
 
+pub use build::{build, build_layout, identity_name, scan, BuildError, DEFAULT_INDEX};
 pub use read::read;
 pub use write::{write, WriteError};
 

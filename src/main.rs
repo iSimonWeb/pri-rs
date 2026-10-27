@@ -1,12 +1,22 @@
-//! `pri dump <file.pri>`: every section, the names, and each item's candidates.
+//! `pri dump <file.pri>`: every section, the names, and each item's candidates; `pri new <layout>`:
+//! a layout's `resources.pri`; `pri roundtrip <file.pri>...`: read, write, compare.
 
 use std::fmt::Write as _;
 use std::io::{ErrorKind, Write as _};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pri::{Body, Candidate, Pri, Section};
 
-const USAGE: &str = "usage: pri dump <file.pri> | pri roundtrip <file.pri>...";
+const USAGE: &str =
+    "usage: pri new <layout> [--name <Identity Name>] [--out <file>] [--index <dir>]...
+       pri dump <file.pri>
+       pri roundtrip <file.pri>...
+
+new      indexes the layout's Assets folder (or each --index folder) into <layout>/resources.pri;
+         without --name, the name is the Identity Name of <layout>/AppxManifest.xml
+dump     prints every section, the names and each item's candidates
+roundtrip  reads, writes and compares each file, byte for byte";
 /// Byte runs longer than this are printed abbreviated.
 const HEX_LIMIT: usize = 48;
 
@@ -14,12 +24,73 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [cmd, path] if cmd == "dump" => dump_file(path),
+        [cmd, args @ ..] if cmd == "new" => new(args),
         [cmd, paths @ ..] if cmd == "roundtrip" && !paths.is_empty() => roundtrip(paths),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
     }
+}
+
+/// `pri new`: builds the layout's PRI and writes it.
+fn new(args: &[String]) -> ExitCode {
+    let mut layout = None;
+    let mut name = None;
+    let mut out = None;
+    let mut index = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let slot = match arg.as_str() {
+            "--name" => &mut name,
+            "--out" => &mut out,
+            "--index" => {
+                match it.next() {
+                    Some(v) => index.push(v.clone()),
+                    None => return usage_error("--index needs a folder"),
+                }
+                continue;
+            }
+            a if a.starts_with("--") => return usage_error(&format!("unknown option {a}")),
+            _ if layout.is_none() => {
+                layout = Some(arg.clone());
+                continue;
+            }
+            _ => return usage_error("one layout only"),
+        };
+        match it.next() {
+            Some(v) => *slot = Some(v.clone()),
+            None => return usage_error(&format!("{arg} needs a value")),
+        }
+    }
+    let Some(layout) = layout else {
+        return usage_error("no layout given");
+    };
+    let layout = Path::new(&layout);
+    let out = out.map_or_else(|| layout.join("resources.pri"), PathBuf::from);
+    let result = pri::build_layout(layout, name.as_deref(), &index, Some(&out))
+        .map_err(|e| e.to_string())
+        .and_then(|file| pri::write(&file).map_err(|e| e.to_string()))
+        .and_then(|bytes| {
+            std::fs::write(&out, &bytes)
+                .map(|()| bytes.len())
+                .map_err(|e| format!("{}: {e}", out.display()))
+        });
+    match result {
+        Ok(len) => {
+            println!("{} ({len} bytes)", out.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pri: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn usage_error(what: &str) -> ExitCode {
+    eprintln!("pri: {what}\n{USAGE}");
+    ExitCode::from(2)
 }
 
 /// Reads, writes and compares each file. A file that doesn't parse (or write) fails the run; one
