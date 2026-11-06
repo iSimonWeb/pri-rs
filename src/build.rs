@@ -45,7 +45,7 @@ const THEME: u16 = 6;
 const ALTERNATE_FORM: u16 = 7;
 
 /// File-name qualifier -> (type, priority), highest priority first. The priorities are the ones
-/// Windows' own packages carry (the spike's census).
+/// Windows' own packages carry (a census of their files, docs/format.md).
 const QUALIFIERS: [(&str, u16, u16); 6] = [
     ("contrast", CONTRAST, 400),
     ("theme", THEME, 350),
@@ -56,7 +56,7 @@ const QUALIFIERS: [(&str, u16, u16); 6] = [
 ];
 
 /// Scale's fallback scores when the default scale is 100, as Windows' own packages carry them
-/// (the spike's census): 1000 at the default, less the further away.
+/// (a census of their files, docs/format.md): 1000 at the default, less the further away.
 const SCALE_FALLBACK: [(u32, u16); 8] = [
     (80, 650),
     (100, 1000),
@@ -70,7 +70,7 @@ const SCALE_FALLBACK: [(u32, u16); 8] = [
 
 /// The target size that is a package's default, and so scores best.
 const DEFAULT_TARGET_SIZE: &str = "256";
-/// Fallback score of every value of a qualifier that has no default but one (also the census).
+/// Fallback score of every value of a qualifier that has no default but one (the same census).
 const BEST_SCORE: u16 = 1000;
 const OTHER_TARGET_SIZE_SCORE: u16 = 500;
 
@@ -219,7 +219,7 @@ fn new_node(name: &str, parent: u16, is_scope: bool, index: u16) -> Result<Node,
 
 impl Layout {
     /// A scope's children sit together, sorted case-insensitively; their own children follow,
-    /// each scope visited in turn (docs/pri-plan.md, 2.3).
+    /// each scope visited in turn (docs/format.md, 2.3).
     fn lay_children(
         &mut self,
         node_i: usize,

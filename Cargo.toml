@@ -1,7 +1,12 @@
 [package]
 name = "pri"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
+description = "Reads, writes and builds Windows resources.pri files, on any platform"
+license = "MIT"
+repository = "https://github.com/iSimonWeb/pri-rs"
+keywords = ["windows", "msix", "pri", "resources"]
+categories = ["command-line-utilities", "parser-implementations"]
 publish = false
 
 [lib]
@@ -14,4 +19,4 @@ path = "src/main.rs"
 # The lib and the bin share a name; only the lib gets docs.
 doc = false
 
-# No dependencies: std only (docs/pri-plan.md, decision 4).
+# No dependencies: std only.

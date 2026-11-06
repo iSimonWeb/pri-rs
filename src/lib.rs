@@ -3,7 +3,7 @@
 //! The model keeps everything a writer needs to reproduce a file byte for byte: raw padding,
 //! tails, name blocks and the header fields we don't interpret. Lengths, offsets and the
 //! sections' footers are not kept; they follow from the rest. The format is described in
-//! docs/pri-plan.md, section 2.
+//! docs/format.md.
 
 mod build;
 mod crc;
