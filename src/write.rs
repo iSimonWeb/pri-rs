@@ -4,7 +4,10 @@
 
 use std::fmt;
 
-use crate::{Body, Candidate, DataItem, DecnInfo, Descriptor, Pri, ResMap, Schema, Section};
+use crate::{
+    Body, Candidate, DataItem, DecnInfo, Descriptor, FileList, Pri, ResMap, Schema, Section,
+};
+use std::collections::HashMap;
 
 const SECTION_FOOTER: u32 = 0xDEF5_FADE;
 const FILE_FOOTER: u32 = 0xDEFF_FADE;
@@ -12,6 +15,7 @@ const HEADER_LEN: usize = 32;
 const TOC_ENTRY_LEN: usize = 32;
 const SECTION_HEADER_LEN: usize = 32;
 const FILE_FOOTER_LEN: usize = 16;
+const SECTION_FOOTER_LEN: usize = 8;
 const HNAMESX_ID: &[u8; 16] = b"[def_hnamesx]  \0";
 
 /// A model that can't be written: a count, name or offset that doesn't fit its field.
@@ -97,9 +101,18 @@ pub fn write(pri: &Pri) -> Result<Vec<u8>, WriteError> {
         toc.u32(s.toc_qualifier);
         toc.u32(u32_of(offset, "a section's offset")?);
         toc.u32(u32_of(bytes.len(), "a section's length")?);
-        offset += bytes.len();
+        offset = match offset
+            .checked_add(bytes.len())
+            .and_then(|o| o.checked_add(s.reserved as usize))
+        {
+            Some(o) => o,
+            None => return err("a file of at most 4 GiB"),
+        };
     }
-    let size = u32_of(first + offset + FILE_FOOTER_LEN, "the file size")?;
+    let size = u32_of(
+        offset.saturating_add(first + FILE_FOOTER_LEN),
+        "the file size",
+    )?;
 
     let mut o = Out::default();
     o.bytes(pri.magic.as_bytes());
@@ -112,12 +125,165 @@ pub fn write(pri: &Pri) -> Result<Vec<u8>, WriteError> {
     o.u16(pri.header_u26);
     o.u32(pri.header_u28);
     o.bytes(&toc.0);
-    for (_, bytes) in &bodies {
+    for (s, bytes) in &bodies {
         o.bytes(bytes);
+        if s.reserved > 0 {
+            let gap = s.reserved as usize;
+            if gap < SECTION_FOOTER_LEN || !gap.is_multiple_of(8) {
+                return err("reserved bytes that hold a section footer and keep 8-byte alignment");
+            }
+            o.bytes(&vec![0; gap - SECTION_FOOTER_LEN]);
+            o.u32(SECTION_FOOTER);
+            o.u32(u32_of(
+                bytes.len().saturating_add(gap),
+                "a section's reserved length",
+            )?);
+        }
     }
     o.u32(FILE_FOOTER);
     o.u32(size);
     o.bytes(pri.magic.as_bytes());
+    Ok(o.0)
+}
+
+/// A name's units with each character uppercased where that keeps it one character of the same
+/// width, as Windows' ordinal comparison ignoring case does; "ß" stays "ß", not "SS".
+fn fold(name: &str) -> Vec<u16> {
+    let mut out = Vec::new();
+    for c in name.chars() {
+        let mut up = c.to_uppercase();
+        let one = match (up.next(), up.next()) {
+            (Some(u), None) if u.len_utf16() == c.len_utf16() => u,
+            _ => c,
+        };
+        let mut buf = [0; 2];
+        out.extend_from_slice(one.encode_utf16(&mut buf));
+    }
+    out
+}
+
+/// As MRT Core's FileListBuilder: folders depth first from the roots, each folder's name, then
+/// its files' names, then its subfolders. The pool opens with a NUL and holds each name once,
+/// compared ignoring case. Path lengths follow from the names; the parent fields are written as
+/// given.
+fn file_list(f: &FileList) -> Result<Vec<u8>, WriteError> {
+    let mut pool = Out::default();
+    pool.u16(0);
+    let mut offsets: HashMap<Vec<u16>, u32> = HashMap::new();
+    let mut place = |name: &str| -> Result<(u32, u16), WriteError> {
+        if name.contains('\0') {
+            return err("a file list name without a NUL");
+        }
+        let cch = u16_of(name.encode_utf16().count(), "a file list name")?;
+        let key = fold(name);
+        if let Some(&at) = offsets.get(&key) {
+            return Ok((at, cch));
+        }
+        let at = u32_of(pool.0.len() / 2, "a file list name's offset")?;
+        pool.wz(name);
+        offsets.insert(key, at);
+        Ok((at, cch))
+    };
+    let range = |first: i16,
+                 n: u16,
+                 len: usize,
+                 what: &str|
+     -> Result<std::ops::Range<usize>, WriteError> {
+        if n == 0 {
+            return Ok(0..0);
+        }
+        let start = usize::try_from(first).ok();
+        match start.and_then(|s| {
+            s.checked_add(n as usize)
+                .filter(|&e| e <= len)
+                .map(|e| s..e)
+        }) {
+            Some(r) => Ok(r),
+            None => err(format!("{what} inside the file list")),
+        }
+    };
+
+    // (offset, cch, full path length) per folder and per file, filled as the walk reaches them.
+    let mut folder_at: Vec<Option<(u32, u16, u16)>> = vec![None; f.folders.len()];
+    let mut file_at: Vec<Option<(u32, u16, u16)>> = vec![None; f.files.len()];
+    let roots = f.roots as usize;
+    if roots > f.folders.len() {
+        return err("root folders inside the file list");
+    }
+    // A folder is claimed when it is pushed, so the stack never holds one twice.
+    let mut claimed = vec![false; f.folders.len()];
+    claimed[..roots].fill(true);
+    let mut stack: Vec<(usize, Option<u16>)> = (0..roots).rev().map(|i| (i, None)).collect();
+    while let Some((i, parent_full)) = stack.pop() {
+        let d = &f.folders[i];
+        let (at, cch) = place(&d.name)?;
+        let full = match parent_full {
+            Some(p) => u16_of(p as usize + 1 + cch as usize, "a folder's path")?,
+            None => cch,
+        };
+        folder_at[i] = Some((at, cch, full));
+        for j in range(d.first_file, d.files, f.files.len(), "a folder's files")? {
+            if file_at[j].is_some() {
+                return err("each file reached once");
+            }
+            let (at, cch) = place(&f.files[j].name)?;
+            let path = u16_of(full as usize + 1 + cch as usize, "a file's path")?;
+            file_at[j] = Some((at, cch, path));
+        }
+        let subs = range(
+            d.first_subfolder,
+            d.subfolders,
+            f.folders.len(),
+            "a folder's subfolders",
+        )?;
+        for j in subs.clone() {
+            if std::mem::replace(&mut claimed[j], true) {
+                return err("each folder reached once");
+            }
+        }
+        stack.extend(subs.rev().map(|j| (j, Some(full))));
+    }
+    let (Some(folder_at), Some(file_at)) = (
+        folder_at.into_iter().collect::<Option<Vec<_>>>(),
+        file_at.into_iter().collect::<Option<Vec<_>>>(),
+    ) else {
+        return err("every folder and file reached from the roots");
+    };
+    let names = if f.names.len() > pool.0.len()
+        && f.names.len().is_multiple_of(2)
+        && f.names.starts_with(&pool.0)
+    {
+        f.names.clone()
+    } else {
+        pool.0
+    };
+
+    let mut o = Out::default();
+    o.u16(f.roots);
+    o.u16(u16_of(f.folders.len(), "the folder count")?);
+    o.u16(u16_of(f.files.len(), "the file count")?);
+    o.u16(f.longest_path);
+    o.u32(u32_of(names.len() / 2, "the names pool")?);
+    for (d, (at, cch, full)) in f.folders.iter().zip(folder_at) {
+        o.u16(d.flags);
+        o.u16(d.parent as u16);
+        o.u16(d.subfolders);
+        o.u16(d.first_subfolder as u16);
+        o.u16(d.files);
+        o.u16(d.first_file as u16);
+        o.u16(cch);
+        o.u16(full);
+        o.u32(at);
+    }
+    for (file, (at, cch, full)) in f.files.iter().zip(file_at) {
+        o.u16(file.flags);
+        o.u16(file.parent as u16);
+        o.u16(full);
+        o.u16(cch);
+        o.u32(at);
+    }
+    o.bytes(&names);
+    o.bytes(&f.pad);
     Ok(o.0)
 }
 
@@ -130,6 +296,7 @@ fn section(s: &Section) -> Result<Vec<u8>, WriteError> {
         Body::Decisions(d) => decn_info(d)?,
         Body::Map(m) => res_map(m)?,
         Body::Data(d) => data_item(d)?,
+        Body::FileList(f) => file_list(f)?,
         Body::Raw(b) => b.clone(),
     };
     let len = u32_of(SECTION_HEADER_LEN + body.len() + 8, "a section's length")?;
@@ -484,13 +651,13 @@ fn res_map(m: &ResMap) -> Result<Vec<u8>, WriteError> {
         match *c {
             Candidate::Ref {
                 value_type,
-                reserved,
+                file,
                 item,
                 section,
             } => {
                 o.u8(1);
                 o.u8(value_type);
-                o.u16(reserved);
+                o.u16(file);
                 o.u16(item);
                 o.u16(section);
             }

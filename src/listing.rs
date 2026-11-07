@@ -65,6 +65,15 @@ fn set_text(dn: &DecnInfo, set: usize) -> Result<String, Error> {
 /// A candidate's value: a data item's string as ASCII, one replacement character per other byte.
 fn value_text(pri: &Pri, c: &Candidate) -> Result<String, Error> {
     match c {
+        Candidate::Ref {
+            file,
+            item,
+            section,
+            ..
+        } if *file != 0 => Ok(format!(
+            "{} section {section} value {item}",
+            merged_file(pri, *file)
+        )),
         Candidate::Ref { item, section, .. } => {
             let Some(Body::Data(d)) = pri.sections.get(*section as usize).map(|s| &s.body) else {
                 return Err(bad(format!("section {section} to be a data item")));
@@ -81,6 +90,15 @@ fn value_text(pri: &Pri, c: &Candidate) -> Result<String, Error> {
         }
         Candidate::Embedded { value, .. } => Ok(format!("embedded {value}")),
     }
+}
+
+/// A merged PRI's file `n` (1-based) by its path, or by number when no file list has it.
+fn merged_file(pri: &Pri, n: u16) -> String {
+    let path = pri.sections.iter().find_map(|s| match &s.body {
+        Body::FileList(f) => f.file_path(n as usize - 1),
+        _ => None,
+    });
+    path.unwrap_or_else(|| format!("file {n}"))
 }
 
 fn map_listing(pri: &Pri, rm: &ResMap, out: &mut String) -> Result<(), Error> {

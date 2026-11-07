@@ -381,12 +381,12 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
                 let _ = match c {
                     Candidate::Ref {
                         value_type,
-                        reserved,
+                        file,
                         item,
                         section,
                     } => writeln!(
                         o,
-                        "    {i}: ref type={value_type} reserved={reserved} item={item} section={section}"
+                        "    {i}: ref type={value_type} file={file} item={item} section={section}"
                     ),
                     Candidate::Embedded {
                         value_type,
@@ -406,6 +406,22 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
             let _ = writeln!(o, "  pad: {}", hex(&d.pad));
             for (i, v) in d.values().iter().enumerate() {
                 let _ = writeln!(o, "  value {i}: {}", value_text(v));
+            }
+        }
+        Body::FileList(f) => {
+            let _ = writeln!(
+                o,
+                "  roots={} folders={} files={} longest_path={} names={} bytes pad: {}",
+                f.roots,
+                f.folders.len(),
+                f.files.len(),
+                f.longest_path,
+                f.names.len(),
+                hex(&f.pad)
+            );
+            for (i, file) in f.files.iter().enumerate() {
+                let path = f.file_path(i).unwrap_or_default();
+                let _ = writeln!(o, "  file {i}: flags={:#x} {path}", file.flags);
             }
         }
         Body::Raw(b) => {

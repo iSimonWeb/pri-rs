@@ -1,8 +1,8 @@
 //! Bytes to model. Every read is bounds-checked; malformed input is an `Error`, never a panic.
 
 use crate::{
-    id_text, Body, Candidate, DataItem, DecnInfo, Descriptor, Distinct, Error, LargeFrom, Node,
-    Pri, Qualifier, ResMap, Schema, Scope, Section,
+    id_text, Body, Candidate, DataItem, DecnInfo, Descriptor, Distinct, Error, FileEntry, FileList,
+    Folder, LargeFrom, Node, Pri, Qualifier, ResMap, Schema, Scope, Section,
 };
 
 const SECTION_FOOTER: u32 = 0xDEF5_FADE;
@@ -10,7 +10,9 @@ const FILE_FOOTER: u32 = 0xDEFF_FADE;
 const HEADER_LEN: usize = 32;
 const SECTION_HEADER_LEN: usize = 32;
 const SECTION_FOOTER_LEN: usize = 8;
-const MAGIC: &[u8; 8] = b"mrm_pri2";
+/// The magics we read: Windows 8.1's, Windows 10's, and Windows 10 1803's (MRT Core's
+/// `gWinBluePriFileMagic`, `gUniversalPriFileMagic`, `gUniversalRS4PriFileMagic`).
+const MAGICS: [&[u8; 8]; 3] = [b"mrm_pri1", b"mrm_pri2", b"mrm_pri3"];
 /// Longest qualifier value we decode (UTF-16 units); real ones are a few characters.
 const MAX_QUALIFIER_VALUE_UNITS: usize = 1024;
 /// Most units all the long-named nodes together may make us scan.
@@ -182,9 +184,9 @@ fn units(raw: &[u8]) -> Vec<u16> {
 pub fn read(data: &[u8]) -> Result<Pri, Error> {
     let mut r = Reader::new(data, 0);
     let magic_raw = r.bytes(8)?;
-    if magic_raw != MAGIC {
+    if !MAGICS.iter().any(|m| magic_raw == *m) {
         r.pos = 0;
-        return r.fail("the magic mrm_pri2");
+        return r.fail("the magic mrm_pri1, mrm_pri2 or mrm_pri3");
     }
     let magic = String::from_utf8_lossy(magic_raw).into_owned();
     let header_u8 = r.u16()?;
@@ -228,8 +230,19 @@ pub fn read(data: &[u8]) -> Result<Pri, Error> {
         tocs.push((id, flags, section_flags, qualifier, off, len));
     }
 
+    // Where each section's successor starts (the file footer, after the last), to find the
+    // bytes reserved after it.
+    let footer_start = data.len() - 16;
+    let next_starts: Vec<usize> = tocs
+        .iter()
+        .skip(1)
+        .map(|t| first.saturating_add(t.4))
+        .chain([footer_start])
+        .collect();
     let mut sections = Vec::new();
-    for (id, toc_flags, toc_section_flags, toc_qualifier, off, len) in tocs {
+    for ((id, toc_flags, toc_section_flags, toc_qualifier, off, len), next) in
+        tocs.into_iter().zip(next_starts)
+    {
         let mut s = Reader::new(data, 0);
         s.pos = first.saturating_add(off);
         let start = s.pos;
@@ -262,6 +275,7 @@ pub fn read(data: &[u8]) -> Result<Pri, Error> {
         }
         let body_raw = &raw[SECTION_HEADER_LEN..len - SECTION_FOOTER_LEN];
         let body = parse_body(&id, body_raw, start + SECTION_HEADER_LEN)?;
+        let reserved = reserved_after(data, start + len, next, len);
         sections.push(Section {
             id,
             toc_flags,
@@ -272,6 +286,7 @@ pub fn read(data: &[u8]) -> Result<Pri, Error> {
             header_section_flags,
             header_u28,
             body,
+            reserved,
         });
     }
     Ok(Pri {
@@ -282,6 +297,32 @@ pub fn read(data: &[u8]) -> Result<Pri, Error> {
         header_u28,
         sections,
     })
+}
+
+/// The bytes reserved after a section that ends at `end`, when what lies between it and `next`
+/// is zeros and then a section footer giving `len` with them; 0 otherwise. Anything else
+/// between sections is ignored, and the writer leaves it out.
+fn reserved_after(data: &[u8], end: usize, next: usize, len: usize) -> u32 {
+    let Some(gap) = next
+        .checked_sub(end)
+        .filter(|&g| g >= SECTION_FOOTER_LEN && g.is_multiple_of(8))
+    else {
+        return 0;
+    };
+    let Some(bytes) = data.get(end..next) else {
+        return 0;
+    };
+    let (zeros, foot) = bytes.split_at(gap - SECTION_FOOTER_LEN);
+    let word = |at: usize| u32::from_le_bytes([foot[at], foot[at + 1], foot[at + 2], foot[at + 3]]);
+    let matches = zeros.iter().all(|&b| b == 0)
+        && word(0) == SECTION_FOOTER
+        && len
+            .checked_add(gap)
+            .is_some_and(|total| word(4) as usize == total);
+    match u32::try_from(gap) {
+        Ok(g) if matches => g,
+        _ => 0,
+    }
 }
 
 fn parse_body(id: &[u8; 16], b: &[u8], base: usize) -> Result<Body, Error> {
@@ -295,7 +336,85 @@ fn parse_body(id: &[u8; 16], b: &[u8], base: usize) -> Result<Body, Error> {
         "[mrm_res_map__]" => Body::Map(res_map(&mut r, false)?),
         "[mrm_res_map2_]" => Body::Map(res_map(&mut r, true)?),
         "[mrm_dataitem]" => Body::Data(data_item(&mut r)?),
+        "[def_file_list]" => Body::FileList(file_list(&mut r)?),
         _ => Body::Raw(b.to_vec()),
+    })
+}
+
+fn file_list(r: &mut Reader) -> Result<FileList, Error> {
+    let roots = r.u16()?;
+    let n_folders = r.u16()? as usize;
+    let n_files = r.u16()? as usize;
+    let longest_path = r.u16()?;
+    let cch_names = r.u32()? as usize;
+    let mut folders = Vec::new();
+    let mut folder_names = Vec::new();
+    for _ in 0..n_folders {
+        let flags = r.u16()?;
+        let parent = r.u16()? as i16;
+        let subfolders = r.u16()?;
+        let first_subfolder = r.u16()? as i16;
+        let files = r.u16()?;
+        let first_file = r.u16()? as i16;
+        let cch_name = r.u16()?;
+        let _full_path = r.u16()?;
+        let offset = r.u32()?;
+        folder_names.push((offset, cch_name));
+        folders.push(Folder {
+            flags,
+            parent,
+            subfolders,
+            first_subfolder,
+            files,
+            first_file,
+            name: String::new(),
+        });
+    }
+    let mut files = Vec::new();
+    let mut file_names = Vec::new();
+    for _ in 0..n_files {
+        let flags = r.u16()?;
+        let parent = r.u16()? as i16;
+        let _full_path = r.u16()?;
+        let cch_name = r.u16()?;
+        let offset = r.u32()?;
+        file_names.push((offset, cch_name));
+        files.push(FileEntry {
+            flags,
+            parent,
+            name: String::new(),
+        });
+    }
+    let names_start = r.pos;
+    let names = r.bytes(cch_names.saturating_mul(2))?.to_vec();
+    let pad = r.rest();
+    // Each name is `cch` units at its offset in the pool.
+    let name_at = |(offset, cch): (u32, u16)| -> Result<String, Error> {
+        let at = (offset as usize).saturating_mul(2);
+        let raw = at
+            .checked_add(cch as usize * 2)
+            .and_then(|end| names.get(at..end));
+        match raw.map(|b| String::from_utf16(&units(b))) {
+            Some(Ok(s)) => Ok(s),
+            _ => Err(Error {
+                offset: (r.base + names_start).saturating_add(at),
+                expected: format!("a name of {cch} UTF-16 units inside the names pool"),
+            }),
+        }
+    };
+    for (f, n) in folders.iter_mut().zip(folder_names) {
+        f.name = name_at(n)?;
+    }
+    for (f, n) in files.iter_mut().zip(file_names) {
+        f.name = name_at(n)?;
+    }
+    Ok(FileList {
+        roots,
+        longest_path,
+        folders,
+        files,
+        names,
+        pad,
     })
 }
 
@@ -636,7 +755,7 @@ fn res_map(r: &mut Reader, v2: bool) -> Result<ResMap, Error> {
         candidates.push(match r.u8()? {
             1 => Candidate::Ref {
                 value_type: r.u8()?,
-                reserved: r.u16()?,
+                file: r.u16()?,
                 item: r.u16()?,
                 section: r.u16()?,
             },

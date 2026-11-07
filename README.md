@@ -63,19 +63,21 @@ every read stays inside its block, and parent cycles are rejected.
 
 ## What it covers
 
-- **Reads** the sections makepri writes for packages and their resource packs:
-  `[mrm_decn_info]`, `[mrm_pridescex]`, `[mrm_hschemaex] `, `[mrm_res_map2_]` and
-  `[mrm_dataitem] `, string resources and `lang-*` qualifiers included.
-- **Writes** a model back with every length, offset, padding and checksum recomputed. The
-  PRIs that makepri wrote for Windows itself come back byte for byte, compiled XAML
-  included.
+- **Reads** `mrm_pri1`, `mrm_pri2` and `mrm_pri3` files: the sections makepri writes for
+  packages and their resource packs (`[mrm_decn_info]`, `[mrm_pridescex]`,
+  `[mrm_hschemaex] `, `[mrm_res_map2_]`, `[mrm_dataitem] `), string resources and `lang-*`
+  qualifiers included, and the merged PRIs Windows keeps in `C:\Windows\rescache`, whose
+  `[def_file_list]` names the files their values live in.
+- **Writes** a model back with every length, offset, padding and checksum recomputed. Every
+  PRI we found on our Windows machine comes back byte for byte, compiled XAML included.
 - **Builds** a `Files` resource map of file candidates under `scale`, `targetsize`, `altform`,
   `contrast` and `theme`.
 
 Not yet covered:
 
 - `lang-*` file qualifiers and string resources (`.resw`) in `pri new`.
-- `[def_file_list]` and merged PRIs: none of the files we have hold one.
+- `[def_file_lstx]`, `[def_file_info]` and the 10-byte candidates of the largest maps: none
+  of the files we have hold one.
 
 [docs/format.md](docs/format.md) describes the format as we measured it, including what is
 still unknown.
@@ -89,7 +91,7 @@ cargo test --release
 The goldens in `tests/golden/` are PRIs that we built ourselves: ours, and two built from the
 asset name lists of Windows packages (names only, no content). We never commit Microsoft's
 PRIs. Under WSL, one test also round-trips the PRIs it finds in `C:\Windows`'s `SystemApps`,
-`SystemResources` and `ImmersiveControlPanel`, and skips where those are absent.
+`SystemResources`, `ImmersiveControlPanel` and `rescache`, and skips where those are absent.
 
 ## Credits
 

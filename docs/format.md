@@ -4,20 +4,25 @@ What we learned writing `resources.pri` files that Windows accepts, checked agai
 under `C:\Windows\SystemApps` (makepri's own output) and against MRT Core's source. Where
 PriTools' notes differ, these are right. Integers are little-endian.
 
-This covers what small packages hold: one `Files` resource map of file candidates. §7 lists
-what lies beyond it.
+This covers what small packages hold, one `Files` resource map of file candidates, and §7 the
+merged PRIs Windows makes. §8 lists what lies beyond.
 
 ## 1. File
 
-- Header (32 bytes): `mrm_pri2`, u16 0, u16 1, u32 file size, u32 TOC offset (32), u32 first
+- Header (32 bytes): the magic, u16 0, u16 1, u32 file size, u32 TOC offset (32), u32 first
   section's offset, u16 section count, u16 0xFFFF, u32 0.
 - TOC: one 32-byte entry per section: 16-byte identifier, u16 flags, u16 section flags, u32
   qualifier (all 0 in small packages), u32 offset from the first section, u32 length.
-- Footer (16 bytes): u32 `0xDEFFFADE`, u32 file size, `mrm_pri2`. PriTools' notes print both
-  footer magics byte-swapped.
+- Footer (16 bytes): u32 `0xDEFFFADE`, u32 file size, the magic again. PriTools' notes print
+  both footer magics byte-swapped.
+- Magics: `mrm_pri2` for what makepri writes today, `mrm_pri3` for the PRIs Windows merges
+  itself, `mrm_pri1` for Windows 8.1's (Office still ships one). The sections are the same.
 - Each section: a 32-byte header (identifier, u32 qualifier, u16 flags, u16 section flags,
   u32 length, u32 0), the body padded to 8 bytes, and a footer (u32 `0xDEF5FADE`, u32
   length). The length counts header, padded body and footer.
+- A section can be followed by bytes it reserved but didn't use: zeros, then a second section
+  footer whose length counts them too. Windows' merged PRIs end their file list that way;
+  nothing else does.
 - A small package's sections, in this order: `[mrm_decn_info]`, `[mrm_pridescex]`,
   `[mrm_hschemaex] `, `[mrm_res_map2_]`, then one or more `[mrm_dataitem] `.
 
@@ -101,8 +106,27 @@ Windows doesn't miss it.
 makepri names folders as they are on disk, so Windows' own packages say `assets` where ours
 say `Assets`. Lookups are case-insensitive.
 
-## 7. Not yet modelled
+## 7. Merged PRIs (`[def_file_list]`)
+
+Windows merges a package's PRIs into one under `C:\Windows\rescache\_merged`. The descriptor
+has flags 8 and lists a file list section, there are no data items, and each candidate's
+u16 after its value type (MRT Core's `detail`) is the 1-based index of the file that holds the
+value, whose own section the candidate's section index names.
+
+- Header (12 bytes): u16 root folder count, u16 folders, u16 files, u16 longest path (always
+  0), u32 names pool length in UTF-16 units.
+- Folder (20 bytes): u16 flags (0), i16 parent (-1 for a root), u16 subfolder count, i16 first
+  subfolder, u16 file count, i16 first file, u16 name length, u16 full path length, u32 name
+  offset. File (12 bytes): u16 flags (2, `INPLACE_AUTOMERGE`), i16 folder, u16 full path
+  length, u16 name length, u32 name offset. A path's length counts the `\` between names.
+- Names pool: a NUL, then the names as MRT Core's `FileListBuilder` visits them: folders depth
+  first from the roots, each folder's name, then its files' names, then its subfolders. Each
+  name is stored once, compared ignoring case character by character (so `ß` and `SS` stay
+  apart), and a file can read back in another file's case.
+
+## 8. Not yet modelled
 
 - **String resources** (`Resources/` maps, `lang-*` qualifiers) and resource packs read and
   round-trip with the model above, but aren't described here yet.
-- `[def_file_list]` and merged PRIs: none of the files we have hold one.
+- `[def_file_lstx]` (file lists with an ASCII pool), `[def_file_info]`, and maps whose flags
+  ask for 10-byte candidates: none of the files we have hold one.

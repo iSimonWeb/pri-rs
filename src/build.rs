@@ -504,7 +504,7 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
         for c in cands {
             candidates.push(Candidate::Ref {
                 value_type: ASCII_PATH,
-                reserved: 0,
+                file: 0,
                 item: fit(strings.len(), "the string count")?,
                 section: DATA_ITEM_SECTION,
             });
@@ -563,6 +563,7 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
         header_section_flags: 0,
         header_u28: 0,
         body,
+        reserved: 0,
     };
     let mut pri = Pri {
         magic: "mrm_pri2".into(),
