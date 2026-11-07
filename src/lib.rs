@@ -123,9 +123,10 @@ pub struct Schema {
     pub scopes: Vec<Scope>,
     /// Node indices of the items, by item index.
     pub items: Vec<u16>,
-    /// The UTF-16 name block, raw.
+    /// The UTF-16 name block, raw. The writer lays names out from `nodes`, and keeps these bytes
+    /// only where they extend that layout (a pool makepri sized larger than its names).
     pub names_uni: Vec<u8>,
-    /// The ASCII name block, raw (only `[def_hnamesx]` has one).
+    /// The ASCII name block, raw (only `[def_hnamesx]` has one), kept the same way.
     pub names_ascii: Vec<u8>,
     /// Whatever follows the names block in the section's body: padding the writer must not
     /// add twice. The same goes for every other `pad` and `tail`.

@@ -4,8 +4,8 @@ What we learned writing `resources.pri` files that Windows accepts, checked agai
 under `C:\Windows\SystemApps` (makepri's own output) and against MRT Core's source. Where
 PriTools' notes differ, these are right. Integers are little-endian.
 
-This covers what small packages hold: one `Files` resource map of file candidates. Strings,
-blobs, merged PRIs and resource packs are outside it (see the README).
+This covers what small packages hold: one `Files` resource map of file candidates. §7 lists
+what lies beyond it.
 
 ## 1. File
 
@@ -35,8 +35,13 @@ the section indices of each kind in that order.
   (root's children, then the first child scope's children, and so on). Each node record holds
   the parent's *node* index, the full path's length (`Files/Assets/X.png`), the name's
   uppercased first character, its length, flags (0x10 scope, 0x20 ASCII) and its offset.
-- Name blocks: the ASCII block starts with a NUL, then scope names by scope index, then item
-  names by item index, each NUL-terminated. Names that aren't ASCII go in the UTF-16 block.
+- Name blocks: scope names by scope index, then item names by item index, each
+  NUL-terminated. ASCII names go in the ASCII block, the rest in the UTF-16 block. Each block
+  that holds names starts with a NUL, and when neither does (a root alone), the UTF-16 block
+  holds that NUL. Without ASCII names the schema uses `[def_hnames]`, which has no ASCII
+  block (MRT Core's `HNamesBuilder`).
+- makepri sizes the blocks from the name tree but fills them from the scope and item lists,
+  so a block can end in zeros that no name uses (`Windows.Activation.pri`).
 - The names' data is padded to its own 8-byte total (the `total` field), and then the section
   body is padded as every section's is. The writer applies both in that order, and that
   matches every file we compared.
@@ -90,5 +95,7 @@ say `Assets`. Lookups are case-insensitive.
 - **Blobs** (compiled XAML) in data items. Their alignment depends on something we haven't
   found: putting each blob at an 8-byte boundary of the section body fixes some files and
   breaks others. Files with blobs read, but don't round-trip byte for byte.
-- **String resources** (`Resources/` maps, `lang-*` qualifiers), `[def_file_list]`, and the
-  u32 extension tables that larger files use.
+- **String resources** (`Resources/` maps, `lang-*` qualifiers) and resource packs read and
+  round-trip with the model above, but aren't described here yet.
+- The resource map's **large tables**, which a few big files use, are kept as raw bytes.
+- `[def_file_list]` and merged PRIs: none of the files we have hold one.

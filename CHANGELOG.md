@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-07
+
+### Fixed
+
+- The writer lays out the names pools as MRT Core's HNamesBuilder does: each pool that holds
+  names starts with a NUL, and when neither does, the UTF-16 one holds that NUL. We had
+  seeded only the ASCII pool. A pool that makepri sized larger than its names keeps its extra
+  bytes. Of the 363 PRIs under `C:\Windows`'s `SystemApps`, `ImmersiveControlPanel` and
+  `SystemResources`, 336 now come back identical, up from 333. The three fixed are the two
+  root-only `Microsoft.Windows.Private.CacheManagement.pri` (a `[def_hnames]` schema) and
+  `Windows.Activation.pri`, whose ASCII pool ends in 21 zero bytes that no name uses. The
+  other 27 all hold blobs, and so do 18 of the identical files.
+- The same census shows that what the README listed as gaps already reads and round-trips:
+  310 of the identical files hold `Resources/` string maps, 265 of the 272 resource packs
+  (`lang-*` qualifiers) are identical, and the 4 files with the resource map's large tables
+  differ only in their blobs. None of the 363 holds a `[def_file_list]` or a merged
+  descriptor.
+
 ### Added
 
 - A repository of its own, with the history it grew in Ultimate Desktop Cleaner's
@@ -44,7 +62,8 @@ All notable changes to this project are documented here. The format follows
   schema checksum computed against the stored one. It reads every `resources.pri` under
   `SystemApps` with matching checksums. Malformed input is an error, never a panic.
 
-[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/iSimonWeb/pri-rs/releases/tag/v0.1.0

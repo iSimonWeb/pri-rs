@@ -176,6 +176,57 @@ fn a_model_that_does_not_fit_is_an_error_not_a_panic() {
     assert!(pri::write(&file).is_err());
 }
 
+/// Makes `chain`'s schema an extended one, with an ASCII names pool, and returns it.
+fn extended(file: &mut Pri) -> &mut Schema {
+    file.sections[0].id = *b"[mrm_hschemaex] ";
+    let Body::Schema(Some(h)) = &mut file.sections[0].body else {
+        unreachable!()
+    };
+    h.extended = true;
+    h.hnames_id = Some(*b"[def_hnamesx]  \0");
+    h
+}
+
+fn read_schema(bytes: &[u8]) -> Schema {
+    match pri::read(bytes).unwrap().sections.remove(0).body {
+        Body::Schema(Some(h)) => h,
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn each_names_pool_with_names_opens_with_a_nul() {
+    let mut file = chain(2);
+    extended(&mut file).nodes[2].name = "ä".into();
+    let h = read_schema(&pri::write(&file).unwrap());
+    assert_eq!(h.names_ascii, b"\0a\0");
+    assert_eq!(h.names_uni, [0, 0, 0xE4, 0, 0, 0]);
+    assert!(!h.nodes[2].is_ascii);
+    assert_eq!(h.nodes[2].offset, 1);
+    assert_eq!(h.nodes[2].name, "ä");
+
+    // No names at all: the UTF-16 pool holds the one NUL.
+    let mut file = chain(0);
+    extended(&mut file);
+    let h = read_schema(&pri::write(&file).unwrap());
+    assert!(h.names_ascii.is_empty());
+    assert_eq!(h.names_uni, [0, 0]);
+}
+
+#[test]
+fn the_names_pools_keep_bytes_past_their_names() {
+    let mut file = chain(1);
+    extended(&mut file).names_ascii = b"\0a\0\0\0\0".to_vec();
+    let h = read_schema(&pri::write(&file).unwrap());
+    assert_eq!(h.names_ascii, b"\0a\0\0\0\0");
+
+    // Bytes that disagree with the names are not kept.
+    let mut file = chain(1);
+    extended(&mut file).names_ascii = b"\0b\0\0\0\0".to_vec();
+    let h = read_schema(&pri::write(&file).unwrap());
+    assert_eq!(h.names_ascii, b"\0a\0");
+}
+
 #[test]
 fn writing_what_hostile_files_parse_to_never_panics() {
     let data = golden_bytes("udc.pri");

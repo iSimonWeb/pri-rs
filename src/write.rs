@@ -179,14 +179,12 @@ fn descriptor(d: &Descriptor) -> Result<Vec<u8>, WriteError> {
 type NameBlocks = (Vec<u8>, Vec<u8>, Vec<(u32, bool)>);
 
 fn name_blocks(h: &Schema, has_ascii_block: bool) -> Result<NameBlocks, WriteError> {
-    let mut uni = Out::default();
-    let mut ascii = if has_ascii_block { vec![0] } else { Vec::new() };
-    let mut placed = vec![(0, false); h.nodes.len()];
     let order = h
         .scopes
         .iter()
         .map(|s| s.node)
         .chain(h.items.iter().copied());
+    let mut named = Vec::new();
     for i in order {
         let Some(n) = h.nodes.get(i as usize) else {
             return err(format!("a scope or item node ({i}) inside the nodes"));
@@ -197,7 +195,20 @@ fn name_blocks(h: &Schema, has_ascii_block: bool) -> Result<NameBlocks, WriteErr
         if n.name.contains('\0') {
             return err("a name without a NUL");
         }
-        placed[i as usize] = if has_ascii_block && n.name.is_ascii() {
+        named.push((i, n, has_ascii_block && n.name.is_ascii()));
+    }
+    // As MRT Core's HNamesBuilder: each pool that holds names starts with a NUL, and the
+    // UTF-16 one also does when neither holds any.
+    let any_ascii = named.iter().any(|&(_, _, a)| a);
+    let any_uni = named.iter().any(|&(_, _, a)| !a);
+    let mut uni = Out::default();
+    if any_uni || !any_ascii {
+        uni.u16(0);
+    }
+    let mut ascii = if any_ascii { vec![0] } else { Vec::new() };
+    let mut placed = vec![(0, false); h.nodes.len()];
+    for (i, n, in_ascii) in named {
+        placed[i as usize] = if in_ascii {
             let at = u32_of(ascii.len(), "an ASCII name's offset")?;
             ascii.extend_from_slice(n.name.as_bytes());
             ascii.push(0);
@@ -208,7 +219,19 @@ fn name_blocks(h: &Schema, has_ascii_block: bool) -> Result<NameBlocks, WriteErr
             (at, false)
         };
     }
-    Ok((uni.0, ascii, placed))
+    // A pool makepri sized larger than the names it holds keeps its extra bytes, as read.
+    let keep = |built: Vec<u8>, read: &[u8]| {
+        if read.len() > built.len() && read.starts_with(&built) {
+            read.to_vec()
+        } else {
+            built
+        }
+    };
+    Ok((
+        keep(uni.0, &h.names_uni),
+        keep(ascii, &h.names_ascii),
+        placed,
+    ))
 }
 
 /// A schema section's body in two parts, the head and the names block, with the block's total

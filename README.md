@@ -63,19 +63,21 @@ every read stays inside its block, and parent cycles are rejected.
 
 ## What it covers
 
-- **Reads** every section that small packages hold: `[mrm_decn_info]`, `[mrm_pridescex]`,
-  `[mrm_hschemaex] `, `[mrm_res_map2_]` and `[mrm_dataitem] `.
+- **Reads** the sections makepri writes for packages and their resource packs:
+  `[mrm_decn_info]`, `[mrm_pridescex]`, `[mrm_hschemaex] `, `[mrm_res_map2_]` and
+  `[mrm_dataitem] `, string resources and `lang-*` qualifiers included.
 - **Writes** a model back with every length, offset, padding and checksum recomputed. Files
-  without blobs come back byte for byte.
+  without blobs come back byte for byte, and so do Windows' own resource packs.
 - **Builds** a `Files` resource map of file candidates under `scale`, `targetsize`, `altform`,
   `contrast` and `theme`.
 
 Not yet covered:
 
-- `lang-*` file qualifiers in `pri new`.
-- Blobs (compiled XAML): they read, but don't round-trip byte for byte.
-- String resources (`Resources/` maps), `[def_file_list]`, merged PRIs and resource
-  packs, and the u32 extension tables that larger files use.
+- `lang-*` file qualifiers and string resources (`.resw`) in `pri new`.
+- Blobs (compiled XAML): they read, but some files that hold them don't round-trip byte for
+  byte.
+- The resource map's large tables: kept as read, not decoded.
+- `[def_file_list]` and merged PRIs: none of the files we have hold one.
 
 [docs/format.md](docs/format.md) describes the format as we measured it, including what is
 still unknown.
