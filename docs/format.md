@@ -80,6 +80,9 @@ the section indices of each kind in that order.
 - Data items: strings, each at a 4-byte boundary, the total padded so the body ends on 8
   bytes. Values are paths with backslashes and a NUL: `Assets\X.targetsize-24_altform-unplated.png`.
   One section for every candidate works; makepri sometimes splits them.
+- Blobs (compiled XAML) follow the strings: the first at an 8-byte boundary of the section
+  body, the others at 4-byte boundaries after it (MRT Core's `DataItemsSectionBuilder`). The
+  header calls strings small items and blobs large ones.
 
 ## 6. What packages index
 
@@ -92,9 +95,6 @@ say `Assets`. Lookups are case-insensitive.
 
 ## 7. Not yet modelled
 
-- **Blobs** (compiled XAML) in data items. Their alignment depends on something we haven't
-  found: putting each blob at an 8-byte boundary of the section body fixes some files and
-  breaks others. Files with blobs read, but don't round-trip byte for byte.
 - **String resources** (`Resources/` maps, `lang-*` qualifiers) and resource packs read and
   round-trip with the model above, but aren't described here yet.
 - The resource map's **large tables**, which a few big files use, are kept as raw bytes.

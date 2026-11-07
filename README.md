@@ -66,16 +66,15 @@ every read stays inside its block, and parent cycles are rejected.
 - **Reads** the sections makepri writes for packages and their resource packs:
   `[mrm_decn_info]`, `[mrm_pridescex]`, `[mrm_hschemaex] `, `[mrm_res_map2_]` and
   `[mrm_dataitem] `, string resources and `lang-*` qualifiers included.
-- **Writes** a model back with every length, offset, padding and checksum recomputed. Files
-  without blobs come back byte for byte, and so do Windows' own resource packs.
+- **Writes** a model back with every length, offset, padding and checksum recomputed. The
+  PRIs that makepri wrote for Windows itself come back byte for byte, compiled XAML
+  included.
 - **Builds** a `Files` resource map of file candidates under `scale`, `targetsize`, `altform`,
   `contrast` and `theme`.
 
 Not yet covered:
 
 - `lang-*` file qualifiers and string resources (`.resw`) in `pri new`.
-- Blobs (compiled XAML): they read, but some files that hold them don't round-trip byte for
-  byte.
 - The resource map's large tables: kept as read, not decoded.
 - `[def_file_list]` and merged PRIs: none of the files we have hold one.
 
@@ -90,16 +89,16 @@ cargo test --release
 
 The goldens in `tests/golden/` are PRIs that we built ourselves: ours, and two built from the
 asset name lists of Windows packages (names only, no content). We never commit Microsoft's
-PRIs. When `/mnt/c/Windows/SystemApps` is present (WSL), one test also round-trips the PRIs
-it finds there, and it skips when the folder is absent.
+PRIs. Under WSL, one test also round-trips the PRIs it finds in `C:\Windows`'s `SystemApps`,
+`SystemResources` and `ImmersiveControlPanel`, and skips where those are absent.
 
 ## Credits
 
 Two projects taught us the format. We read them, and the code here is our own:
 
 - [MRT Core](https://github.com/microsoft/WindowsAppSDK/tree/main/dev/MRTCore) in the
-  Windows App SDK (MIT), Microsoft's own resource code. It settled the schema checksum and the
-  builder's layout.
+  Windows App SDK (MIT), Microsoft's own resource code. It settled the schema checksum, the
+  blobs' alignment and the builder's layout.
 - [PriTools](https://github.com/chausner/PriTools) (Apache-2.0), whose
   reverse-engineered format notes were where we started.
 

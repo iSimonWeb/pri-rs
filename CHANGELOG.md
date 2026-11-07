@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-07
+
+### Fixed
+
+- Blobs (compiled XAML) round-trip byte for byte. The first blob starts at an 8-byte boundary
+  of the section body and each one after it at 4, as MRT Core's `DataItemsSectionBuilder` lays
+  out its large items. In 0.2.0 we had put every blob on 8, which fixed some files and broke
+  others. Measured on the 45 files with blobs, the only gaps beyond 4-byte rounding came at the
+  first blob, 128 of them, each 4 bytes. All 363 PRIs under `C:\Windows`'s `SystemApps`,
+  `ImmersiveControlPanel` and `SystemResources` now come back identical, and the WSL test
+  round-trips all three folders instead of `SystemApps` alone, with no exception for blobs.
+
 ## [0.3.1] - 2026-11-07
 
 ### Fixed
@@ -62,7 +74,8 @@ All notable changes to this project are documented here. The format follows
   schema checksum computed against the stored one. It reads every `resources.pri` under
   `SystemApps` with matching checksums. Malformed input is an error, never a panic.
 
-[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.1.0...v0.2.0

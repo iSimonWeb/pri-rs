@@ -1,11 +1,18 @@
 //! The writer: our own builds and, where the machine has them, Windows' PRIs (never committed)
 //! come back byte for byte; hostile models don't panic it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use pri::{Body, Node, Pri, Schema, Scope, Section};
+use pri::{Body, DataItem, Node, Pri, Schema, Scope, Section};
 
+/// Where Windows keeps PRIs that makepri wrote, and how deep below them we look.
+const WINDOWS_PRI_DIRS: [&str; 3] = [
+    "/mnt/c/Windows/SystemApps",
+    "/mnt/c/Windows/SystemResources",
+    "/mnt/c/Windows/ImmersiveControlPanel",
+];
+const WINDOWS_PRI_DEPTH: usize = 3;
 /// Windows' PRIs above this size are skipped, to keep the test quick.
 const SYSTEM_PRI_LIMIT: u64 = 3 * 1024 * 1024;
 /// A chain this deep must checksum in well under this.
@@ -38,19 +45,33 @@ fn goldens_round_trip() {
     }
 }
 
-fn holds_blobs(file: &Pri) -> bool {
-    file.sections
-        .iter()
-        .any(|s| matches!(&s.body, Body::Data(d) if !d.blobs.is_empty()))
+/// The `.pri` files under `dir`, at most `depth` folders down.
+fn pris_under(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth > 0 {
+                pris_under(&path, depth - 1, out);
+            }
+        } else if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pri"))
+        {
+            out.push(path);
+        }
+    }
 }
 
 #[test]
-fn system_apps_round_trip_unless_they_hold_blobs() {
-    let Ok(dir) = std::fs::read_dir("/mnt/c/Windows/SystemApps") else {
-        return;
-    };
-    for entry in dir.flatten() {
-        let path = entry.path().join("resources.pri");
+fn windows_pris_round_trip() {
+    let mut paths = Vec::new();
+    for dir in WINDOWS_PRI_DIRS {
+        pris_under(Path::new(dir), WINDOWS_PRI_DEPTH, &mut paths);
+    }
+    for path in paths {
         if !std::fs::metadata(&path).is_ok_and(|m| m.len() <= SYSTEM_PRI_LIMIT) {
             continue;
         }
@@ -58,13 +79,7 @@ fn system_apps_round_trip_unless_they_hold_blobs() {
         let name = path.display().to_string();
         let file = pri::read(&data).unwrap_or_else(|e| panic!("{name}: {e}"));
         let out = pri::write(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
-        // Blobs are laid out as we choose, but what we write must read back the same.
-        if holds_blobs(&file) {
-            let again = pri::read(&out).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(pri::write(&again).unwrap(), out, "{name}");
-        } else {
-            assert!(out == data, "{name}: written bytes differ");
-        }
+        assert!(out == data, "{name}: written bytes differ");
     }
 }
 
@@ -225,6 +240,29 @@ fn the_names_pools_keep_bytes_past_their_names() {
     extended(&mut file).names_ascii = b"\0b\0\0\0\0".to_vec();
     let h = read_schema(&pri::write(&file).unwrap());
     assert_eq!(h.names_ascii, b"\0a\0");
+}
+
+#[test]
+fn blobs_start_on_8_bytes_of_the_body_and_follow_on_4() {
+    // Header and tables take 12 + 4 + 2 * 8 = 32 bytes, so the string "a" leaves the data at
+    // 36 of the body, and the first blob goes to 40: offset 8 in the data.
+    let mut file = chain(0);
+    file.sections[0].id = *b"[mrm_dataitem] \0";
+    file.sections[0].body = Body::Data(DataItem {
+        u0: 0,
+        strs: vec![(0, 1)],
+        blobs: vec![(1, 1), (2, 1)],
+        data: b"abc".to_vec(),
+        pad: Vec::new(),
+    });
+    let back = pri::read(&pri::write(&file).unwrap()).unwrap();
+    let Body::Data(d) = &back.sections[0].body else {
+        unreachable!()
+    };
+    assert_eq!(d.strs, [(0, 1)]);
+    assert_eq!(d.blobs, [(8, 1), (12, 1)]);
+    assert_eq!(d.values(), [b"a", b"b", b"c"]);
+    assert_eq!((32 + d.data.len()) % 8, 0);
 }
 
 #[test]

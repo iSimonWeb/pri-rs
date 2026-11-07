@@ -458,13 +458,21 @@ fn res_map(m: &ResMap) -> Result<Vec<u8>, WriteError> {
     Ok(o.0)
 }
 
-/// Strings then blobs, each at a 4-byte boundary, the body ending on 8 bytes.
+/// Strings then blobs, each at a 4-byte boundary, the first blob and the body's end on 8.
 fn data_item(d: &DataItem) -> Result<Vec<u8>, WriteError> {
     let n_strs = d.strs.len();
     let mut data = Vec::new();
     let mut strs = Vec::new();
     let mut blobs = Vec::new();
+    // The data follows the header and both tables; it is padded against the body's start.
+    let fixed = 12 + 4 * n_strs + 8 * d.blobs.len();
+    let pad_to_8 =
+        |data: &mut Vec<u8>| data.resize(data.len() + (fixed + data.len()).wrapping_neg() % 8, 0);
     for (i, v) in d.values().into_iter().enumerate() {
+        if i == n_strs {
+            // As MRT Core's DataItemsSectionBuilder.
+            pad_to_8(&mut data);
+        }
         let at = data.len();
         if i < n_strs {
             let at = u16_of(at, "a string's offset")?;
@@ -476,8 +484,7 @@ fn data_item(d: &DataItem) -> Result<Vec<u8>, WriteError> {
         data.extend_from_slice(v);
         data.resize(data.len().next_multiple_of(4), 0);
     }
-    let fixed = 12 + 4 * strs.len() + 8 * blobs.len();
-    data.resize(data.len() + (fixed + data.len()).wrapping_neg() % 8, 0);
+    pad_to_8(&mut data);
 
     let mut o = Out::default();
     o.u32(d.u0);
