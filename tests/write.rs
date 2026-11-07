@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use pri::{Body, DataItem, Node, Pri, Schema, Scope, Section};
+use pri::{Body, Candidate, DataItem, LargeFrom, Node, Pri, ResMap, Schema, Scope, Section};
 
 /// Where Windows keeps PRIs that makepri wrote, and how deep below them we look.
 const WINDOWS_PRI_DIRS: [&str; 3] = [
@@ -263,6 +263,136 @@ fn blobs_start_on_8_bytes_of_the_body_and_follow_on_4() {
     assert_eq!(d.blobs, [(8, 1), (12, 1)]);
     assert_eq!(d.values(), [b"a", b"b", b"c"]);
     assert_eq!((32 + d.data.len()) % 8, 0);
+}
+
+/// A map of `n` items in one group, each with one candidate.
+fn map_file(n: u32, large_from: Option<LargeFrom>) -> Pri {
+    let mut file = chain(0);
+    file.sections[0].id = *b"[mrm_res_map2_]\0";
+    file.sections[0].body = Body::Map(ResMap {
+        v2: true,
+        env: Vec::new(),
+        env_count: 0,
+        schema_section: 0,
+        schema_ref: Vec::new(),
+        decn_section: 0,
+        types: vec![(4, 0)],
+        flags: 0,
+        item_to_group: vec![(0, 0)],
+        groups: vec![(n, 0)],
+        infos: (0..n).map(|i| (1, i)).collect(),
+        large_from,
+        candidates: (0..n)
+            .map(|_| Candidate::Embedded {
+                value_type: 0,
+                reserved: 0,
+                value: 0,
+            })
+            .collect(),
+        data: Vec::new(),
+        pad: Vec::new(),
+    });
+    file
+}
+
+#[test]
+fn a_map_past_16_bits_moves_its_tables_to_the_large_block() {
+    // 0x10002 items of one candidate each: too many for the 16-bit tables alone.
+    let n = 0x1_0002;
+    let mut file = map_file(n, None);
+    assert!(pri::write(&file).is_err());
+
+    let Body::Map(m) = &mut file.sections[0].body else {
+        unreachable!()
+    };
+    // makepri's split: item 0xFFFF's candidates end past 0xFFFF, so it and the rest go large,
+    // in a range of their own.
+    m.item_to_group = vec![(0, 0), (0xFFFF, 1)];
+    m.groups = vec![(0xFFFF, 0), (3, 0xFFFF)];
+    m.large_from = Some(LargeFrom {
+        item_to_group: 1,
+        groups: 1,
+        infos: 0xFFFF,
+    });
+    let bytes = pri::write(&file).unwrap();
+    let back = pri::read(&bytes).unwrap();
+    assert_eq!(back.sections[0].body, file.sections[0].body);
+    assert_eq!(pri::write(&back).unwrap(), bytes);
+}
+
+#[test]
+fn a_large_block_that_starts_inside_no_table_is_an_error() {
+    for (item_to_group, groups, infos) in [(2, 1, 1), (1, 2, 1), (1, 1, 3)] {
+        let file = map_file(
+            2,
+            Some(LargeFrom {
+                item_to_group,
+                groups,
+                infos,
+            }),
+        );
+        assert!(
+            pri::write(&file).is_err(),
+            "{item_to_group} {groups} {infos}"
+        );
+    }
+}
+
+/// A two-item map whose second info sits in the large block, and where in the bytes the map's
+/// body and its large block start.
+fn map_with_large_block() -> (Vec<u8>, usize, usize) {
+    let file = map_file(
+        2,
+        Some(LargeFrom {
+            item_to_group: 1,
+            groups: 1,
+            infos: 1,
+        }),
+    );
+    let bytes = pri::write(&file).unwrap();
+    let id = b"[mrm_res_map2_]\0";
+    let section = bytes.windows(16).rposition(|w| w == id).unwrap();
+    let body = section + 32;
+    // Header, one value type, then one 4-byte entry in each 16-bit table.
+    let large = body + 32 + 8 + 3 * 4;
+    assert_eq!(bytes[body + 28], 20, "the large block's length");
+    assert_eq!(
+        bytes[large..large + 12],
+        [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]
+    );
+    (bytes, body, large)
+}
+
+#[test]
+fn a_malformed_large_block_is_an_error() {
+    let (bytes, body, large) = map_with_large_block();
+    assert!(pri::read(&bytes).is_ok());
+    let broken: [(&str, usize, u8); 4] = [
+        ("flags asking for 10-byte candidates", body + 18, 1),
+        ("a block shorter than its counts", body + 28, 4),
+        ("counts that don't fill the block", large, 1),
+        ("an info's pad that isn't 0", large + 12 + 2, 1),
+    ];
+    for (what, at, value) in broken {
+        let mut b = bytes.clone();
+        b[at] = value;
+        assert!(pri::read(&b).is_err(), "{what}");
+    }
+}
+
+#[test]
+fn writing_what_hostile_large_blocks_parse_to_never_panics() {
+    let (bytes, body, _) = map_with_large_block();
+    for i in body..bytes.len() {
+        for flip in [0x01, 0x80, 0xFF] {
+            let mut b = bytes.clone();
+            b[i] ^= flip;
+            if let Ok(file) = pri::read(&b) {
+                let _ = file.listing();
+                let _ = pri::write(&file);
+            }
+        }
+    }
 }
 
 #[test]

@@ -499,7 +499,7 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
         };
         infos.push((
             fit(di, "the decision count")?,
-            fit(candidates.len(), "the candidate count")?,
+            u32::from(fit(candidates.len(), "the candidate count")?),
         ));
         for c in cands {
             candidates.push(Candidate::Ref {
@@ -629,10 +629,11 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
                     schema_ref: Vec::new(),
                     decn_section: DECN_SECTION,
                     types: (0..MAP_TYPES).map(|i| (4, i)).collect(),
+                    flags: 0,
                     item_to_group: vec![(0, 0)],
-                    groups: vec![(n_items, 0)],
+                    groups: vec![(u32::from(n_items), 0)],
                     infos,
-                    large: Vec::new(),
+                    large_from: None,
                     candidates,
                     data: Vec::new(),
                     pad: Vec::new(),

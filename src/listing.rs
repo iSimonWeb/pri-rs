@@ -100,15 +100,15 @@ fn map_listing(pri: &Pri, rm: &ResMap, out: &mut String) -> Result<(), Error> {
             None => (1, gi as usize - rm.groups.len()),
         };
         for k in 0..n {
-            let item = first_item as usize + k;
-            let &(dec, first_cand) = rm
-                .infos
-                .get(first_info + k)
-                .ok_or_else(|| bad(format!("info {}", first_info + k)))?;
-            let node = u16::try_from(item)
-                .ok()
+            let item = (first_item as usize).checked_add(k);
+            let info = first_info.checked_add(k);
+            let &(dec, first_cand) = info
+                .and_then(|i| rm.infos.get(i))
+                .ok_or_else(|| bad(format!("info {first_info} + {k}")))?;
+            let node = item
+                .and_then(|i| u16::try_from(i).ok())
                 .and_then(|i| item_node.get(&i))
-                .ok_or_else(|| bad(format!("a node for item {item}")))?;
+                .ok_or_else(|| bad(format!("a node for item {first_item} + {k}")))?;
             let &(f, nsets) = dn
                 .decisions
                 .get(dec as usize)
@@ -119,10 +119,10 @@ fn map_listing(pri: &Pri, rm: &ResMap, out: &mut String) -> Result<(), Error> {
                 .get(f as usize..f as usize + nsets as usize)
                 .ok_or_else(|| bad(format!("index table run for decision {dec}")))?;
             for (j, &si) in sets.iter().enumerate() {
-                let c = rm
-                    .candidates
-                    .get(first_cand as usize + j)
-                    .ok_or_else(|| bad(format!("candidate {}", first_cand as usize + j)))?;
+                let c = (first_cand as usize)
+                    .checked_add(j)
+                    .and_then(|i| rm.candidates.get(i))
+                    .ok_or_else(|| bad(format!("candidate {first_cand} + {j}")))?;
                 let _ = writeln!(
                     out,
                     "    {} -> {}",

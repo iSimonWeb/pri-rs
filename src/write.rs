@@ -403,7 +403,56 @@ fn decn_info(d: &DecnInfo) -> Result<Vec<u8>, WriteError> {
     Ok(o.0)
 }
 
+/// The 16-bit part of a map table, and what follows in the large block.
+fn split_at<'a, T>(
+    table: &'a [T],
+    from: Option<u32>,
+    what: &str,
+) -> Result<(&'a [T], &'a [T]), WriteError> {
+    let at = from.map_or(table.len(), |n| n as usize);
+    if at > table.len() {
+        return err(format!(
+            "{what}: a large block that starts inside the table"
+        ));
+    }
+    Ok(table.split_at(at))
+}
+
+fn narrow(pairs: &[(u32, u32)], what: &str) -> Result<Vec<(u16, u16)>, WriteError> {
+    pairs
+        .iter()
+        .map(|&(a, b)| Ok((u16_of(a as usize, what)?, u16_of(b as usize, what)?)))
+        .collect()
+}
+
 fn res_map(m: &ResMap) -> Result<Vec<u8>, WriteError> {
+    if m.flags & 1 != 0 {
+        return err("map flags without large candidates (bit 0)");
+    }
+    let lf = m.large_from;
+    let (dir, dir_large) = split_at(
+        &m.item_to_group,
+        lf.map(|l| l.item_to_group),
+        "the directory",
+    )?;
+    let (groups, groups_large) = split_at(&m.groups, lf.map(|l| l.groups), "the groups")?;
+    let (infos, infos_large) = split_at(&m.infos, lf.map(|l| l.infos), "the infos")?;
+    let mut large = Out::default();
+    if lf.is_some() {
+        large.u32(u32_of(dir_large.len(), "the large directory")?);
+        large.u32(u32_of(groups_large.len(), "the large groups")?);
+        large.u32(u32_of(infos_large.len(), "the large infos")?);
+        for &(a, b) in dir_large.iter().chain(groups_large) {
+            large.u32(a);
+            large.u32(b);
+        }
+        for &(decision, first) in infos_large {
+            large.u16(decision);
+            large.u16(0);
+            large.u32(first);
+        }
+    }
+
     let mut o = Out::default();
     o.u16(u16_of(m.env.len(), "the environment")?);
     o.u16(m.env_count);
@@ -411,22 +460,26 @@ fn res_map(m: &ResMap) -> Result<Vec<u8>, WriteError> {
     o.u16(u16_of(m.schema_ref.len(), "the schema reference")?);
     o.u16(m.decn_section);
     o.u16(u16_of(m.types.len(), "the type count")?);
-    o.u16(u16_of(m.item_to_group.len(), "the item-to-group count")?);
-    o.u16(u16_of(m.groups.len(), "the group count")?);
-    o.u32(u32_of(m.infos.len(), "the info count")?);
+    o.u16(u16_of(dir.len(), "the directory count")?);
+    o.u16(u16_of(groups.len(), "the group count")?);
+    o.u16(u16_of(infos.len(), "the info count")?);
+    o.u16(m.flags);
     o.u32(u32_of(m.candidates.len(), "the candidate count")?);
     o.u32(u32_of(m.data.len(), "the data length")?);
-    o.u32(u32_of(m.large.len(), "the large block")?);
+    o.u32(u32_of(large.0.len(), "the large block")?);
     o.bytes(&m.env);
     o.bytes(&m.schema_ref);
     for &(a, b) in &m.types {
         o.u32(a);
         o.u32(b);
     }
-    o.pairs(&m.item_to_group);
-    o.pairs(&m.groups);
-    o.pairs(&m.infos);
-    o.bytes(&m.large);
+    o.pairs(&narrow(dir, "a directory entry")?);
+    o.pairs(&narrow(groups, "a group")?);
+    for &(decision, first) in infos {
+        o.u16(decision);
+        o.u16(u16_of(first as usize, "an info's first candidate")?);
+    }
+    o.bytes(&large.0);
     for c in &m.candidates {
         match *c {
             Candidate::Ref {

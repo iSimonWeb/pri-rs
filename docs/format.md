@@ -77,6 +77,14 @@ the section indices of each kind in that order.
   item-to-group entry (first item 0, group 0), one group (item count, 0), then per item
   (decision, first candidate), and per candidate `01 05 0000 <data item index> <section>`:
   type 1 (a data item), value type 5 (AsciiPath).
+- The map's header counts the directory, groups and items in u16s, then holds u16 flags (bit
+  0 would make every candidate 10 bytes; no file we have sets it). At the first item whose
+  index, or whose candidates' end, passes 0xFFFF, makepri moves that item and every later
+  entry to the large block, which
+  sits between the items and the candidates: three u32 counts, then the directory and groups
+  as u32 pairs and the items as (u16 decision, u16 0, u32 first candidate). The tables
+  continue across both parts: indices count the 16-bit entries first (MRT Core's
+  `MapBuilder`).
 - Data items: strings, each at a 4-byte boundary, the total padded so the body ends on 8
   bytes. Values are paths with backslashes and a NUL: `Assets\X.targetsize-24_altform-unplated.png`.
   One section for every candidate works; makepri sometimes splits them.
@@ -97,5 +105,4 @@ say `Assets`. Lookups are case-insensitive.
 
 - **String resources** (`Resources/` maps, `lang-*` qualifiers) and resource packs read and
   round-trip with the model above, but aren't described here yet.
-- The resource map's **large tables**, which a few big files use, are kept as raw bytes.
 - `[def_file_list]` and merged PRIs: none of the files we have hold one.

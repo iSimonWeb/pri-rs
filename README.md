@@ -75,7 +75,6 @@ every read stays inside its block, and parent cycles are rejected.
 Not yet covered:
 
 - `lang-*` file qualifiers and string resources (`.resw`) in `pri new`.
-- The resource map's large tables: kept as read, not decoded.
 - `[def_file_list]` and merged PRIs: none of the files we have hold one.
 
 [docs/format.md](docs/format.md) describes the format as we measured it, including what is

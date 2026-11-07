@@ -326,16 +326,32 @@ pub struct ResMap {
     pub schema_ref: Vec<u8>,
     pub decn_section: u16,
     pub types: Vec<(u32, u32)>,
-    /// (first item, group index).
-    pub item_to_group: Vec<(u16, u16)>,
+    /// The header's flags. Bit 0 would make every candidate the 10-byte large form, which the
+    /// reader refuses: no file we have sets it.
+    pub flags: u16,
+    /// The directory: (first item, group index), where an index past the groups points at one
+    /// info, `groups.len()` before it.
+    pub item_to_group: Vec<(u32, u32)>,
     /// (item count, first info).
-    pub groups: Vec<(u16, u16)>,
+    pub groups: Vec<(u32, u32)>,
     /// Per item: (decision, first candidate).
-    pub infos: Vec<(u16, u16)>,
-    pub large: Vec<u8>,
+    pub infos: Vec<(u16, u32)>,
+    /// Where the 32-bit tables take over from the 16-bit ones, when they do. The three tables
+    /// above hold both parts, in order.
+    pub large_from: Option<LargeFrom>,
     pub candidates: Vec<Candidate>,
     pub data: Vec<u8>,
     pub pad: Vec<u8>,
+}
+
+/// How many directory entries, groups and infos a resource map keeps in its 16-bit tables;
+/// the rest follow in its large block. makepri moves to the large block at the first item
+/// whose index, or whose candidates' end, passes 0xFFFF, and stays there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LargeFrom {
+    pub item_to_group: u32,
+    pub groups: u32,
+    pub infos: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

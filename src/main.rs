@@ -365,11 +365,17 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
                 hex(&m.schema_ref),
                 m.decn_section
             );
-            let _ = writeln!(o, "  types: {:?}", m.types);
+            let _ = writeln!(o, "  types: {:?} flags={:#x}", m.types, m.flags);
             let _ = writeln!(o, "  item_to_group: {:?}", m.item_to_group);
             let _ = writeln!(o, "  groups: {:?}", m.groups);
             let _ = writeln!(o, "  infos: {:?}", m.infos);
-            let _ = writeln!(o, "  large: {}", hex(&m.large));
+            if let Some(l) = m.large_from {
+                let _ = writeln!(
+                    o,
+                    "  large from: item_to_group {} groups {} infos {}",
+                    l.item_to_group, l.groups, l.infos
+                );
+            }
             let _ = writeln!(o, "  candidates: {}", m.candidates.len());
             for (i, c) in m.candidates.iter().enumerate() {
                 let _ = match c {

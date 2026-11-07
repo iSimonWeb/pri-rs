@@ -1,8 +1,8 @@
 //! Bytes to model. Every read is bounds-checked; malformed input is an `Error`, never a panic.
 
 use crate::{
-    id_text, Body, Candidate, DataItem, DecnInfo, Descriptor, Distinct, Error, Node, Pri,
-    Qualifier, ResMap, Schema, Scope, Section,
+    id_text, Body, Candidate, DataItem, DecnInfo, Descriptor, Distinct, Error, LargeFrom, Node,
+    Pri, Qualifier, ResMap, Schema, Scope, Section,
 };
 
 const SECTION_FOOTER: u32 = 0xDEF5_FADE;
@@ -16,6 +16,10 @@ const MAX_QUALIFIER_VALUE_UNITS: usize = 1024;
 /// Most units all the long-named nodes together may make us scan.
 const NAME_SCAN_BUDGET: usize = 16 << 20;
 const HNAMESX_ID: &[u8; 16] = b"[def_hnamesx]  \0";
+/// The resource map flag for 10-byte candidates.
+const LARGE_CANDIDATES: u16 = 1;
+/// The large block's header: its three u32 counts.
+const LARGE_HEADER_LEN: usize = 12;
 
 /// A cursor over `data`, whose first byte sits at `base` in the file (for error offsets).
 struct Reader<'a> {
@@ -569,7 +573,13 @@ fn res_map(r: &mut Reader, v2: bool) -> Result<ResMap, Error> {
     let n_types = r.u16()? as usize;
     let n_i2g = r.u16()? as usize;
     let n_groups = r.u16()? as usize;
-    let n_infos = r.u32()? as usize;
+    let n_infos = r.u16()? as usize;
+    let flags_at = r.pos;
+    let flags = r.u16()?;
+    if flags & LARGE_CANDIDATES != 0 {
+        r.pos = flags_at;
+        return r.fail("map flags without large candidates (bit 0)");
+    }
     let n_cands = r.u32()? as usize;
     let data_len = r.u32()? as usize;
     let large_len = r.u32()? as usize;
@@ -578,10 +588,48 @@ fn res_map(r: &mut Reader, v2: bool) -> Result<ResMap, Error> {
     let types = (0..n_types)
         .map(|_| Ok((r.u32()?, r.u32()?)))
         .collect::<Result<_, Error>>()?;
-    let item_to_group = r.pairs(n_i2g)?;
-    let groups = r.pairs(n_groups)?;
-    let infos = r.pairs(n_infos)?;
-    let large = r.bytes(large_len)?.to_vec();
+    let wide = |(a, b): (u16, u16)| (a as u32, b as u32);
+    let mut item_to_group: Vec<(u32, u32)> = r.pairs(n_i2g)?.into_iter().map(wide).collect();
+    let mut groups: Vec<(u32, u32)> = r.pairs(n_groups)?.into_iter().map(wide).collect();
+    let mut infos: Vec<(u16, u32)> = r
+        .pairs(n_infos)?
+        .into_iter()
+        .map(|(d, c)| (d, c as u32))
+        .collect();
+    let large_from = if large_len == 0 {
+        None
+    } else {
+        let mut l = Reader::new(r.bytes(large_len)?, r.base + r.pos - large_len);
+        let n = [l.u32()?, l.u32()?, l.u32()?];
+        // Each entry is 8 bytes, so the counts must fit what the block holds.
+        let fits = n
+            .iter()
+            .try_fold(LARGE_HEADER_LEN, |sum, &k| {
+                (k as usize).checked_mul(8).and_then(|b| sum.checked_add(b))
+            })
+            .is_some_and(|need| need == large_len);
+        if !fits {
+            l.pos = 0;
+            return l.fail("large table counts that fill the large block exactly");
+        }
+        let from = LargeFrom {
+            item_to_group: item_to_group.len() as u32,
+            groups: groups.len() as u32,
+            infos: infos.len() as u32,
+        };
+        for _ in 0..n[0] {
+            item_to_group.push((l.u32()?, l.u32()?));
+        }
+        for _ in 0..n[1] {
+            groups.push((l.u32()?, l.u32()?));
+        }
+        for _ in 0..n[2] {
+            let decision = l.u16()?;
+            l.zero16()?;
+            infos.push((decision, l.u32()?));
+        }
+        Some(from)
+    };
     let mut candidates = Vec::new();
     for _ in 0..n_cands {
         let at = r.pos;
@@ -613,10 +661,11 @@ fn res_map(r: &mut Reader, v2: bool) -> Result<ResMap, Error> {
         schema_ref,
         decn_section,
         types,
+        flags,
         item_to_group,
         groups,
         infos,
-        large,
+        large_from,
         candidates,
         data,
         pad,
