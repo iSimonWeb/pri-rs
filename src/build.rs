@@ -499,12 +499,12 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
         };
         infos.push((
             fit(di, "the decision count")?,
-            fit(candidates.len(), "the candidate count")?,
+            u32::from(fit(candidates.len(), "the candidate count")?),
         ));
         for c in cands {
             candidates.push(Candidate::Ref {
                 value_type: ASCII_PATH,
-                reserved: 0,
+                file: 0,
                 item: fit(strings.len(), "the string count")?,
                 section: DATA_ITEM_SECTION,
             });
@@ -563,6 +563,7 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
         header_section_flags: 0,
         header_u28: 0,
         body,
+        reserved: 0,
     };
     let mut pri = Pri {
         magic: "mrm_pri2".into(),
@@ -629,10 +630,11 @@ pub fn build(name: &str, files: &[String]) -> Result<Pri, BuildError> {
                     schema_ref: Vec::new(),
                     decn_section: DECN_SECTION,
                     types: (0..MAP_TYPES).map(|i| (4, i)).collect(),
+                    flags: 0,
                     item_to_group: vec![(0, 0)],
-                    groups: vec![(n_items, 0)],
+                    groups: vec![(u32::from(n_items), 0)],
                     infos,
-                    large: Vec::new(),
+                    large_from: None,
                     candidates,
                     data: Vec::new(),
                     pad: Vec::new(),

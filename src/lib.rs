@@ -1,4 +1,5 @@
-//! Reads Windows PRI files (`resources.pri`, format `mrm_pri2`) into a typed model.
+//! Reads Windows PRI files (`resources.pri`, formats `mrm_pri1`, `mrm_pri2` and `mrm_pri3`)
+//! into a typed model.
 //!
 //! The model keeps everything a writer needs to reproduce a file byte for byte: raw padding,
 //! tails, name blocks and the header fields we don't interpret. Lengths, offsets and the
@@ -60,6 +61,10 @@ pub struct Section {
     pub header_section_flags: u16,
     pub header_u28: u32,
     pub body: Body,
+    /// Bytes reserved after the section and left unused: zeros, then a section footer that
+    /// gives the length with them. Windows' merged PRIs end their file list that way. 0 for
+    /// none.
+    pub reserved: u32,
 }
 
 impl Section {
@@ -85,7 +90,77 @@ pub enum Body {
     Decisions(DecnInfo),
     Map(ResMap),
     Data(DataItem),
+    FileList(FileList),
     Raw(Vec<u8>),
+}
+
+/// `[def_file_list]`: the folders and files a merged PRI was made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileList {
+    /// How many of the first folders are roots.
+    pub roots: u16,
+    /// The header's longest path, kept as read (makepri writes 0).
+    pub longest_path: u16,
+    pub folders: Vec<Folder>,
+    pub files: Vec<FileEntry>,
+    /// The UTF-16 names pool, raw. The writer lays names out from the folders and files, and
+    /// keeps these bytes only where they extend that layout, as a schema's pools.
+    pub names: Vec<u8>,
+    pub pad: Vec<u8>,
+}
+
+impl FileList {
+    /// File `i`'s full path, its folders joined with `\`. A parent chain that loops, leaves the
+    /// folders or passes Windows' longest path starts the path with `?`.
+    pub fn file_path(&self, i: usize) -> Option<String> {
+        let file = self.files.get(i)?;
+        let mut parts = vec![file.name.as_str()];
+        let mut units = file.name.encode_utf16().count();
+        let mut at = file.parent;
+        // A chain longer than the folders loops.
+        for _ in 0..self.folders.len() {
+            let Some(d) = usize::try_from(at).ok().and_then(|a| self.folders.get(a)) else {
+                break;
+            };
+            units = units.saturating_add(d.name.encode_utf16().count() + 1);
+            if units > MAX_PATH_UNITS {
+                break;
+            }
+            parts.push(&d.name);
+            at = d.parent;
+        }
+        if at != -1 {
+            parts.push("?");
+        }
+        parts.reverse();
+        Some(parts.join("\\"))
+    }
+}
+
+/// The longest path Windows accepts, in UTF-16 units.
+const MAX_PATH_UNITS: usize = 32767;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folder {
+    pub flags: u16,
+    /// The parent folder's index, -1 for a root.
+    pub parent: i16,
+    pub subfolders: u16,
+    /// The first subfolder's index, -1 for none.
+    pub first_subfolder: i16,
+    pub files: u16,
+    /// The first file's index, -1 for none.
+    pub first_file: i16,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    /// 2 is `INPLACE_AUTOMERGE`, 1 `INPLACE_MERGE_PRELOAD`.
+    pub flags: u16,
+    /// The containing folder's index.
+    pub parent: i16,
+    pub name: String,
 }
 
 /// `[mrm_pridescex]`: the section indices of each kind.
@@ -326,16 +401,32 @@ pub struct ResMap {
     pub schema_ref: Vec<u8>,
     pub decn_section: u16,
     pub types: Vec<(u32, u32)>,
-    /// (first item, group index).
-    pub item_to_group: Vec<(u16, u16)>,
+    /// The header's flags. Bit 0 would make every candidate the 10-byte large form, which the
+    /// reader refuses: no file we have sets it.
+    pub flags: u16,
+    /// The directory: (first item, group index), where an index past the groups points at one
+    /// info, `groups.len()` before it.
+    pub item_to_group: Vec<(u32, u32)>,
     /// (item count, first info).
-    pub groups: Vec<(u16, u16)>,
+    pub groups: Vec<(u32, u32)>,
     /// Per item: (decision, first candidate).
-    pub infos: Vec<(u16, u16)>,
-    pub large: Vec<u8>,
+    pub infos: Vec<(u16, u32)>,
+    /// Where the 32-bit tables take over from the 16-bit ones, when they do. The three tables
+    /// above hold both parts, in order.
+    pub large_from: Option<LargeFrom>,
     pub candidates: Vec<Candidate>,
     pub data: Vec<u8>,
     pub pad: Vec<u8>,
+}
+
+/// How many directory entries, groups and infos a resource map keeps in its 16-bit tables;
+/// the rest follow in its large block. makepri moves to the large block at the first item
+/// whose index, or whose candidates' end, passes 0xFFFF, and stays there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LargeFrom {
+    pub item_to_group: u32,
+    pub groups: u32,
+    pub infos: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,10 +434,12 @@ pub enum Candidate {
     /// A value in a data item section.
     Ref {
         value_type: u8,
-        reserved: u16,
+        /// The file that holds the value: 0 for this one, or in a merged PRI, the 1-based
+        /// index of a file in its file list (MRT Core's `detail`).
+        file: u16,
         /// Index among that section's values.
         item: u16,
-        /// The data item's section index.
+        /// The data item's section index, in that file.
         section: u16,
     },
     Embedded {

@@ -5,6 +5,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
+### Added
+
+- Merged PRIs and the older and newer magics read and round-trip. Searching all of `C:` on
+  our Windows machine turned up 626 PRIs beyond the 363 we had: 124 more `mrm_pri2`, all
+  identical already, 501 `mrm_pri3` (500 of them the merged PRIs in
+  `C:\Windows\rescache\_merged`), and one `mrm_pri1` that Office ships. The reader accepts
+  all three magics, and all 989 files come back byte for byte.
+- `[def_file_list]` is modelled (`Body::FileList`): folders, files and their names, which the
+  writer lays out as MRT Core's `FileListBuilder` does. Rebuilt that way, all 500 names pools
+  matched the stored ones. `pri dump` prints each file's full path, and its listing names the
+  file a merged PRI's value lives in instead of failing on it.
+- A section can keep bytes it reserved and didn't use (`Section::reserved`). 349 of the
+  merged PRIs end their file list with some, zeros and then a second section footer that
+  counts them.
+
+### Changed
+
+- `Candidate::Ref`'s `reserved` is now `file`: 0 for the file itself, or in a merged PRI the
+  1-based index of the file in its file list that holds the value.
+
+## [0.4.0] - 2026-11-07
+
+### Changed
+
+- The resource map's large block is decoded: the directory, groups and items continue there
+  in 32 bits from the first item whose index, or whose candidates' end, passes 0xFFFF, as
+  MRT Core's `MapBuilder` lays them out. `ResMap`'s three tables now hold both parts in
+  32-bit fields, `large_from` says where the large part starts, and the header's `flags` has
+  a field of its own (it had been read as the high half of the item count). `pri dump` used
+  to stop at the 16-bit items: on `MicrosoftWindows.Client.CBS` it listed 691 of 3776 items,
+  and now lists all of them. All 487 `mrm_pri2` files on our Windows machine still come back
+  identical, the 4 with a large block included. A map whose flags ask for 10-byte candidates
+  is an error, since no file we have uses them, and so is a large block with bytes its
+  counts don't account for, which MRT Core would ignore.
+
 ## [0.3.2] - 2026-11-07
 
 ### Fixed
@@ -74,7 +111,9 @@ All notable changes to this project are documented here. The format follows
   schema checksum computed against the stored one. It reads every `resources.pri` under
   `SystemApps` with matching checksums. Malformed input is an error, never a panic.
 
-[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/iSimonWeb/pri-rs/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/iSimonWeb/pri-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/iSimonWeb/pri-rs/compare/v0.2.0...v0.3.0

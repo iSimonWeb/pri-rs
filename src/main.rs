@@ -365,22 +365,28 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
                 hex(&m.schema_ref),
                 m.decn_section
             );
-            let _ = writeln!(o, "  types: {:?}", m.types);
+            let _ = writeln!(o, "  types: {:?} flags={:#x}", m.types, m.flags);
             let _ = writeln!(o, "  item_to_group: {:?}", m.item_to_group);
             let _ = writeln!(o, "  groups: {:?}", m.groups);
             let _ = writeln!(o, "  infos: {:?}", m.infos);
-            let _ = writeln!(o, "  large: {}", hex(&m.large));
+            if let Some(l) = m.large_from {
+                let _ = writeln!(
+                    o,
+                    "  large from: item_to_group {} groups {} infos {}",
+                    l.item_to_group, l.groups, l.infos
+                );
+            }
             let _ = writeln!(o, "  candidates: {}", m.candidates.len());
             for (i, c) in m.candidates.iter().enumerate() {
                 let _ = match c {
                     Candidate::Ref {
                         value_type,
-                        reserved,
+                        file,
                         item,
                         section,
                     } => writeln!(
                         o,
-                        "    {i}: ref type={value_type} reserved={reserved} item={item} section={section}"
+                        "    {i}: ref type={value_type} file={file} item={item} section={section}"
                     ),
                     Candidate::Embedded {
                         value_type,
@@ -400,6 +406,22 @@ fn dump_body(o: &mut String, s: &Section) -> bool {
             let _ = writeln!(o, "  pad: {}", hex(&d.pad));
             for (i, v) in d.values().iter().enumerate() {
                 let _ = writeln!(o, "  value {i}: {}", value_text(v));
+            }
+        }
+        Body::FileList(f) => {
+            let _ = writeln!(
+                o,
+                "  roots={} folders={} files={} longest_path={} names={} bytes pad: {}",
+                f.roots,
+                f.folders.len(),
+                f.files.len(),
+                f.longest_path,
+                f.names.len(),
+                hex(&f.pad)
+            );
+            for (i, file) in f.files.iter().enumerate() {
+                let path = f.file_path(i).unwrap_or_default();
+                let _ = writeln!(o, "  file {i}: flags={:#x} {path}", file.flags);
             }
         }
         Body::Raw(b) => {
