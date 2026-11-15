@@ -1,4 +1,5 @@
-//! Reads Windows PRI files (`resources.pri`, format `mrm_pri2`) into a typed model.
+//! Reads Windows PRI files (`resources.pri`, formats `mrm_pri1`, `mrm_pri2` and `mrm_pri3`)
+//! into a typed model.
 //!
 //! The model keeps everything a writer needs to reproduce a file byte for byte: raw padding,
 //! tails, name blocks and the header fields we don't interpret. Lengths, offsets and the

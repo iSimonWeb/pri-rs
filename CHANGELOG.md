@@ -33,14 +33,14 @@ All notable changes to this project are documented here. The format follows
 
 - The resource map's large block is decoded: the directory, groups and items continue there
   in 32 bits from the first item whose index, or whose candidates' end, passes 0xFFFF, as
-  MRT Core's `MapBuilder` lays them out. `ResMap`'s three tables now hold both parts in 32-bit fields, `large_from` says
-  where the large part starts, and the header's `flags` has a field of its own (it had been
-  read as the high half of the item count). `pri dump` used to stop at the 16-bit items: on
-  `MicrosoftWindows.Client.CBS` it listed 691 of 3776 items, and now lists all of them.
-  All 487 `mrm_pri2` files on our Windows machine still come back identical, the 4 with a
-  large block included. A map whose flags ask for 10-byte candidates is an error, since no
-  file we have uses them, and so is a large block with bytes its counts don't account for,
-  which MRT Core would ignore.
+  MRT Core's `MapBuilder` lays them out. `ResMap`'s three tables now hold both parts in
+  32-bit fields, `large_from` says where the large part starts, and the header's `flags` has
+  a field of its own (it had been read as the high half of the item count). `pri dump` used
+  to stop at the 16-bit items: on `MicrosoftWindows.Client.CBS` it listed 691 of 3776 items,
+  and now lists all of them. All 487 `mrm_pri2` files on our Windows machine still come back
+  identical, the 4 with a large block included. A map whose flags ask for 10-byte candidates
+  is an error, since no file we have uses them, and so is a large block with bytes its
+  counts don't account for, which MRT Core would ignore.
 
 ## [0.3.2] - 2026-11-07
 
